@@ -329,11 +329,13 @@ get_oglap_places()         # → list[dict]  (lieux chargés — volumineux, à 
 
 Le SDK charge trois fichiers de référence depuis `https://s3.guinee.io/oglap/ggp/<version>/` :
 
-| Fichier                             | Taille  | Description                                                            |
-| ----------------------------------- | ------- | ---------------------------------------------------------------------- |
-| `gn_oglap_country_profile.json`     | ~3 Ko   | Paramètres de grille, codes admin, règles de nommage, plage de compat. |
-| `gn_localities_naming.json`         | ~300 Ko | Table de nommage des régions / préfectures / zones                     |
-| `gn_full.json`                      | ~37 Mo  | Base de lieux avec polygones GeoJSON                                   |
+| Fichier                             | Taille réseau | Sur disque | Description                                                       |
+| ----------------------------------- | ------------- | ---------- | ----------------------------------------------------------------- |
+| `gn_oglap_country_profile.json`     | ~1 Ko         | ~3 Ko      | Paramètres de grille, codes admin, règles de nommage, plage de compat. |
+| `gn_localities_naming.json`         | ~25 Ko        | ~300 Ko    | Table de nommage des régions / préfectures / zones                |
+| `gn_full.json`                      | ~2,5 Mo       | ~13 Mo     | Base de lieux avec polygones GeoJSON                              |
+
+Le CDN sert les trois fichiers avec `Content-Encoding: gzip`. `httpx` décompresse de manière transparente : le fichier mis en cache sur disque est le JSON d'origine, vous n'avez jamais à manipuler de fichier gzippé.
 
 Par défaut, ils sont mis en cache dans `./oglap-data/latest/`. Ce dossier est **gitignoré** dans ce dépôt (et dans le `.gitignore` modèle du SDK) et devrait l'être également dans le vôtre — les fichiers sont retéléchargés de façon reproductible par `init_oglap()`.
 

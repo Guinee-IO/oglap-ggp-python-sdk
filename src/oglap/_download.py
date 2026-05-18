@@ -40,7 +40,17 @@ async def fetch_with_progress(
                     + (f" {response.reason_phrase}" if response.reason_phrase else "")
                 )
 
-            total = int(response.headers.get("content-length", "0"))
+            # When the response is gzip-compressed (Content-Encoding: gzip),
+            # content-length is the compressed wire size but aiter_bytes yields
+            # already-decompressed chunks — using it would make the percentage
+            # overshoot 100%. The uploader writes the original size to the S3
+            # user metadata header `x-amz-meta-uncompressed-length`; when that's
+            # available we use it, otherwise we suppress the percentage.
+            is_compressed = bool(response.headers.get("content-encoding"))
+            if is_compressed:
+                total = int(response.headers.get("x-amz-meta-uncompressed-length", "0"))
+            else:
+                total = int(response.headers.get("content-length", "0"))
             chunks: list[bytes] = []
             loaded = 0
             win_start = time.monotonic()

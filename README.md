@@ -329,11 +329,13 @@ get_oglap_places()         # → list[dict]  (the loaded places — large, use s
 
 The SDK loads three reference files from `https://s3.guinee.io/oglap/ggp/<version>/`:
 
-| File                                | Size   | Description                                                            |
-| ----------------------------------- | ------ | ---------------------------------------------------------------------- |
-| `gn_oglap_country_profile.json`     | ~3 KB  | Grid parameters, admin codes, naming rules, compatibility range        |
-| `gn_localities_naming.json`         | ~300 KB | Naming table for regions / prefectures / zones                        |
-| `gn_full.json`                      | ~37 MB | Places database with GeoJSON polygons                                  |
+| File                                | Wire size  | On disk | Description                                                       |
+| ----------------------------------- | ---------- | ------- | ----------------------------------------------------------------- |
+| `gn_oglap_country_profile.json`     | ~1 KB      | ~3 KB   | Grid parameters, admin codes, naming rules, compatibility range   |
+| `gn_localities_naming.json`         | ~25 KB     | ~300 KB | Naming table for regions / prefectures / zones                    |
+| `gn_full.json`                      | ~2.5 MB    | ~13 MB  | Places database with GeoJSON polygons                             |
+
+The CDN serves all three with `Content-Encoding: gzip`. `httpx` decompresses transparently, so the cached file on disk is the original JSON — you don't need to touch a gzipped file at any point.
 
 By default they are cached to `./oglap-data/latest/`. The cache directory is **gitignored** in this repo (and the SDK's `.gitignore` template) and should be gitignored in yours too — these files are reproducibly downloaded by `init_oglap()`.
 

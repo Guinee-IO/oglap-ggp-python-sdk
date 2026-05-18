@@ -95,17 +95,29 @@ def strip_prefecture_prefix(name: str) -> str:
 def _get_admin_level_6_name_from_containment(lon: float, lat: float) -> str | None:
     """Infer prefecture-level admin name by point containment (admin_level=6)."""
     from ._geo import point_in_geometry  # local import to break circular
+    from ._spatial import candidate_place_indices  # local import to break circular
 
     if not state.places:
         return None
 
+    # Build admin_level-6 lookup set keyed by id(place) for O(1) membership.
     if state.admin_level_6_places_cache is None:
         state.admin_level_6_places_cache = [
             p for p in state.places
             if _parse_admin_level(p) == 6
         ]
+    al6_ids = {id(p) for p in state.admin_level_6_places_cache}
 
-    for place in state.admin_level_6_places_cache:
+    # Walk R-tree candidates, only consider admin_level=6 ones.
+    candidates = candidate_place_indices(lon, lat)
+    seen: set[int] = set()
+    for i in candidates:
+        if i in seen:
+            continue
+        seen.add(i)
+        place = state.places[i]
+        if id(place) not in al6_ids:
+            continue
         if not place.get("geojson"):
             continue
         if not point_in_geometry(lon, lat, place["geojson"]):
@@ -220,8 +232,8 @@ def name_key_fallback_a(
     if not significant_tokens or not address or not address.get("state"):
         return None
     two = consonant_abbrev2(significant_tokens)
-    state_first = (address["state"] or "")[:1].upper()
-    if not re.match(r"[A-Z]", state_first):
+    state_first = normalized_first_letter(address.get("state", ""))
+    if not state_first:
         return None
     return (two + state_first)[:3]
 

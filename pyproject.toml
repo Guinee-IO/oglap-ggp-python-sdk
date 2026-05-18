@@ -4,13 +4,13 @@ build-backend = "hatchling.build"
 
 [project]
 name = "oglap"
-version = "0.1.0"
+version = "0.1.2"
 description = "OGLAP Protocol SDK — Offline Grid Location Addressing for Guinea (GN)"
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.9"
-authors = [{ name = "OGLAP Team" }]
-keywords = ["gis", "geocoding", "addressing", "guinea", "grid", "offline"]
+authors = [{ name = "Guinee IO" }]
+keywords = ["gis", "geocoding", "addressing", "guinea", "grid", "offline", "oglap", "ggp", "lap"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
@@ -27,6 +27,11 @@ dependencies = [
     "shapely>=2.0",
     "httpx>=0.25",
 ]
+
+[project.urls]
+Homepage = "https://github.com/Guinee-IO/oglap-ggp-python-sdk"
+Repository = "https://github.com/Guinee-IO/oglap-ggp-python-sdk"
+Issues = "https://github.com/Guinee-IO/oglap-ggp-python-sdk/issues"
 
 [project.optional-dependencies]
 dev = [

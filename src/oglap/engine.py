@@ -7,9 +7,10 @@ Exposes 16 functions mirroring the JavaScript SDK.
 from __future__ import annotations
 
 import re
+import math
 from typing import Any, Callable
 
-from ._constants import PACKAGE_VERSION
+from ._constants import MAX_ZONE_CODE_LENGTH, PACKAGE_VERSION
 from ._download import init_oglap_download
 from ._geo import (
     bbox_from_geometry,
@@ -25,10 +26,17 @@ from ._grid import (
 from ._spatial import (
     build_lap_search_index,
     build_oglap_result,
+    build_places_rtree,
     reverse_geocode,
 )
 from ._state import state
 from ._validate import validate_and_apply
+
+
+ZONE_CODE_RE = re.compile(rf"^[A-Z0-9]{{1,{MAX_ZONE_CODE_LENGTH}}}$")
+LOCAL_MACROBLOCK_RE = re.compile(r"^[A-J]\d[A-J]\d$", re.IGNORECASE)
+NATIONAL_MACROBLOCK_RE = re.compile(r"^[A-Z]{6}$")
+MICROSPOT_RE = re.compile(r"^\d{4}$")
 
 
 # ── Simple getters ──────────────────────────────────────────────────
@@ -98,6 +106,7 @@ async def init_oglap(
     """
     state.initialized = False
     state.init_report = None
+    state.reset_loaded_data(clear_places=True)
 
     # ── Direct mode: init_oglap(profile, localities) ──
     is_direct = (
@@ -146,10 +155,13 @@ async def init_oglap(
         state.init_report = report
         report["dataDir"] = version_dir
         return report
-    state.initialized = True
 
     # Load places
-    load_result = load_oglap(dl["data"])
+    state.initialized = True
+    try:
+        load_result = load_oglap(dl["data"])
+    except Exception as err:
+        load_result = {"ok": False, "count": 0, "message": f"Failed to load places database: {err}"}
     report["checks"].append({
         "id": "data.load",
         "status": "pass" if load_result["ok"] else "fail",
@@ -158,6 +170,8 @@ async def init_oglap(
     if not load_result["ok"]:
         report["ok"] = False
         report["error"] = load_result["message"]
+        state.initialized = False
+        state.reset_loaded_data(clear_places=True)
     report["dataLoaded"] = load_result
     report["dataDir"] = version_dir
     state.init_report = report
@@ -171,33 +185,25 @@ def load_oglap(data: Any) -> dict[str, Any]:
 
     Validates that ``init_oglap`` was called first.
     """
-    state.lap_search_index = None
-    state.upper_admin_letter_cache.clear()
-    state.admin_level_6_places_cache = None
+    state.reset_loaded_data(clear_places=True)
 
     if not state.initialized:
-        state.places = []
         return {"ok": False, "count": 0, "message": "Cannot load data: initOglap must be called first with a valid profile and localities naming."}
 
     if not isinstance(data, list):
-        state.places = []
         return {"ok": False, "count": 0, "message": "Data must be an array of place objects."}
 
     if len(data) == 0:
-        state.places = []
         return {"ok": False, "count": 0, "message": "Data array is empty — no places to load."}
 
-    # Spot-check first entry
-    sample = data[0]
-    if not isinstance(sample, dict):
-        state.places = []
-        return {"ok": False, "count": 0, "message": "Data entries are not valid objects."}
-    has_geometry = bool(sample.get("geojson"))
-    has_address = bool(sample.get("address"))
-    has_place_id = sample.get("place_id") is not None
-    if not has_place_id and not has_geometry and not has_address:
-        state.places = []
-        return {"ok": False, "count": 0, "message": "Data entries do not appear to be OGLAP place objects (missing place_id, geojson, and address)."}
+    for i, entry in enumerate(data):
+        if not isinstance(entry, dict):
+            return {"ok": False, "count": 0, "message": f"Data entry at index {i} is not a valid place object."}
+        has_geometry = bool(entry.get("geojson"))
+        has_address = entry.get("address") is not None
+        has_place_id = entry.get("place_id") is not None
+        if not has_place_id and not has_geometry and not has_address:
+            return {"ok": False, "count": 0, "message": f"Data entry at index {i} does not appear to be an OGLAP place object (missing place_id, geojson, and address)."}
 
     state.places = data
 
@@ -211,6 +217,18 @@ def load_oglap(data: Any) -> dict[str, Any]:
             if geo.get("type") in ("Polygon", "MultiPolygon"):
                 state.country_border_geojson = geo
                 break
+
+    try:
+        # Build the R-tree spatial index eagerly. O(N) build, O(log N + K) queries.
+        # For ~17K places this takes a few ms and saves a lot on every reverse_geocode.
+        build_places_rtree()
+    except Exception as err:
+        state.reset_loaded_data(clear_places=True)
+        return {
+            "ok": False,
+            "count": 0,
+            "message": f"Failed to build spatial index: {err}",
+        }
 
     with_geometry = sum(1 for p in data if p.get("geojson"))
     return {
@@ -227,118 +245,57 @@ def get_oglap_places() -> list[dict[str, Any]]:
 
 # ── LAP code parsing / validation ───────────────────────────────────
 
+def _to_query_string(query: Any) -> str:
+    return query.strip() if isinstance(query, str) else ""
+
+
+def _is_valid_zone_code(code: str) -> bool:
+    return bool(isinstance(code, str) and ZONE_CODE_RE.match(code))
+
+
 def parse_lap_code(query: str) -> dict[str, Any] | None:
-    """Parse a raw search query into structured LAP components.
-
-    Supports LAP codes with or without country prefix, plus zone search formats.
-
-    With country prefix:
-      - National: ``CC-ADMIN2-XXXYYY-MICRO`` (4 parts)
-      - Local:    ``CC-ADMIN2-ADMIN3-MACRO-MICRO`` (5 parts)
-
-    Without country prefix:
-      - National: ``ADMIN2-XXXYYY-MICRO`` (3 parts)
-      - Local:    ``ADMIN2-ADMIN3-MACRO-MICRO`` (4 parts)
-    """
-    q = (query or "").strip()
-    if not q:
+    """Parse a raw search query into structured LAP components."""
+    q = _to_query_string(query)
+    if not q or len(q) > 64:
         return None
     parts = [p.upper() for p in re.split(r"[\s\-]+", q) if p]
     cc = state.country_code
 
-    # National LAP with CC: CC-ADMIN2-XXXYYY-MICRO (4 parts, macroblock = 6 chars all A-Z)
-    if len(parts) >= 4 and parts[0] == cc:
-        admin2_code = parts[1]
-        maybe_macro = parts[2]
-        maybe_micro = parts[3]
-        admin2_iso = state.oglap_country_regions_reverse.get(admin2_code)
-        if (
-            admin2_iso
-            and len(maybe_macro) == 6
-            and re.match(r"^[A-Z]{6}$", maybe_macro)
-            and len(maybe_micro) == 4
-            and re.match(r"^\d{4}$", maybe_micro)
-        ):
-            return {
-                "admin_level_2_Iso": admin2_iso,
-                "admin_level_3_code": None,
-                "macroblock": maybe_macro,
-                "microspot": maybe_micro,
-                "isNationalGrid": True,
-            }
+    if len(parts) == 4 and parts[0] == cc:
+        admin2_iso = state.oglap_country_regions_reverse.get(parts[1])
+        if admin2_iso and NATIONAL_MACROBLOCK_RE.match(parts[2]) and MICROSPOT_RE.match(parts[3]):
+            return {"admin_level_2_Iso": admin2_iso, "admin_level_3_code": None, "macroblock": parts[2], "microspot": parts[3], "isNationalGrid": True}
 
-    # Local LAP with CC: CC-ADMIN2-ADMIN3-MACRO-MICRO (5 parts)
-    if len(parts) >= 5 and parts[0] == cc:
-        admin2_code = parts[1]
-        admin3_code = parts[2]
-        macroblock = parts[3]
-        microspot = parts[4]
-        admin2_iso = state.oglap_country_regions_reverse.get(admin2_code)
-        if admin2_iso and len(admin3_code) >= 1 and len(macroblock) == 4 and len(microspot) == 4:
-            return {
-                "admin_level_2_Iso": admin2_iso,
-                "admin_level_3_code": admin3_code,
-                "macroblock": macroblock,
-                "microspot": microspot,
-                "isNationalGrid": False,
-            }
+    if len(parts) == 5 and parts[0] == cc:
+        admin2_iso = state.oglap_country_regions_reverse.get(parts[1])
+        if admin2_iso and _is_valid_zone_code(parts[2]) and LOCAL_MACROBLOCK_RE.match(parts[3]) and MICROSPOT_RE.match(parts[4]):
+            return {"admin_level_2_Iso": admin2_iso, "admin_level_3_code": parts[2], "macroblock": parts[3], "microspot": parts[4], "isNationalGrid": False}
 
-    # National LAP without CC: ADMIN2-XXXYYY-MICRO (3 parts, macroblock = 6 chars all A-Z)
     if len(parts) == 3 and parts[0] != cc:
-        admin2_code = parts[0]
-        maybe_macro = parts[1]
-        maybe_micro = parts[2]
-        admin2_iso = state.oglap_country_regions_reverse.get(admin2_code)
-        if (
-            admin2_iso
-            and len(maybe_macro) == 6
-            and re.match(r"^[A-Z]{6}$", maybe_macro)
-            and len(maybe_micro) == 4
-            and re.match(r"^\d{4}$", maybe_micro)
-        ):
-            return {
-                "admin_level_2_Iso": admin2_iso,
-                "admin_level_3_code": None,
-                "macroblock": maybe_macro,
-                "microspot": maybe_micro,
-                "isNationalGrid": True,
-            }
+        admin2_iso = state.oglap_country_regions_reverse.get(parts[0])
+        if admin2_iso and NATIONAL_MACROBLOCK_RE.match(parts[1]) and MICROSPOT_RE.match(parts[2]):
+            return {"admin_level_2_Iso": admin2_iso, "admin_level_3_code": None, "macroblock": parts[1], "microspot": parts[2], "isNationalGrid": True}
 
-    # Local LAP without CC: ADMIN2-ADMIN3-MACRO-MICRO (4 parts, macroblock = 4 chars)
     if len(parts) == 4 and parts[0] != cc:
-        admin2_code = parts[0]
-        admin3_code = parts[1]
-        macroblock = parts[2]
-        microspot = parts[3]
-        admin2_iso = state.oglap_country_regions_reverse.get(admin2_code)
-        if admin2_iso and len(admin3_code) >= 1 and len(macroblock) == 4 and len(microspot) == 4:
-            return {
-                "admin_level_2_Iso": admin2_iso,
-                "admin_level_3_code": admin3_code,
-                "macroblock": macroblock,
-                "microspot": microspot,
-                "isNationalGrid": False,
-            }
+        admin2_iso = state.oglap_country_regions_reverse.get(parts[0])
+        if admin2_iso and _is_valid_zone_code(parts[1]) and LOCAL_MACROBLOCK_RE.match(parts[2]) and MICROSPOT_RE.match(parts[3]):
+            return {"admin_level_2_Iso": admin2_iso, "admin_level_3_code": parts[1], "macroblock": parts[2], "microspot": parts[3], "isNationalGrid": False}
 
-    # Zone search with country prefix: CC-ADMIN2-ADMIN3
-    if len(parts) >= 3 and parts[0] == cc:
-        admin2_code = parts[1]
-        admin3_code = parts[2]
-        admin2_iso = state.oglap_country_regions_reverse.get(admin2_code)
-        if admin2_iso and len(admin3_code) >= 1:
-            return {"admin_level_2_Iso": admin2_iso, "admin_level_3_code": admin3_code}
+    if len(parts) == 3 and parts[0] == cc:
+        admin2_iso = state.oglap_country_regions_reverse.get(parts[1])
+        if admin2_iso and _is_valid_zone_code(parts[2]):
+            return {"admin_level_2_Iso": admin2_iso, "admin_level_3_code": parts[2]}
 
-    # Zone search shorthand: ADMIN2 ADMIN3
-    if len(parts) == 2 and len(parts[0]) <= 4 and len(parts[1]) <= 4:
-        admin2_code = parts[0]
-        admin3_code = parts[1]
-        admin2_iso = state.oglap_country_regions_reverse.get(admin2_code)
-        if admin2_iso:
-            return {"admin_level_2_Iso": admin2_iso, "admin_level_3_code": admin3_code}
+    if len(parts) == 2 and len(parts[0]) <= 4 and len(parts[1]) <= MAX_ZONE_CODE_LENGTH:
+        admin2_iso = state.oglap_country_regions_reverse.get(parts[0])
+        if admin2_iso and _is_valid_zone_code(parts[1]):
+            return {"admin_level_2_Iso": admin2_iso, "admin_level_3_code": parts[1]}
 
-    # Zone code only
-    if len(parts) == 1 and len(parts[0]) <= 4:
-        return {"admin_level_3_code": parts[0]}
+    if len(parts) == 1 and _is_valid_zone_code(parts[0]):
+        token = parts[0]
+        if token == cc or token in state.oglap_country_regions_reverse:
+            return None
+        return {"admin_level_3_code": token}
 
     return None
 
@@ -349,9 +306,11 @@ def validate_lap_code(query: str) -> str | None:
     Accepts full LAP with or without country prefix (national or local), zone search.
     Returns ``None`` if perfectly valid, or a descriptive error string.
     """
-    q = (query or "").strip()
+    q = _to_query_string(query)
     if not q:
         return "Enter a LAP code or zone code to search."
+    if len(q) > 64:
+        return "Input too long. A valid LAP code is at most ~25 characters."
 
     parts = [p.upper() for p in re.split(r"[\s\-]+", q) if p]
     cc = state.country_code
@@ -366,13 +325,13 @@ def validate_lap_code(query: str) -> str | None:
         admin2 = state.oglap_country_regions_reverse.get(parts[1])
         if not admin2:
             return 'Unknown region code "%s". Use a valid ADMIN_LEVEL_2 code (e.g. CKY).' % parts[1]
-        if not parts[2] or len(parts[2]) < 1:
-            return "Zone (ADMIN_LEVEL_3) code is required."
+        if not _is_valid_zone_code(parts[2]):
+            return f"Zone (ADMIN_LEVEL_3) code must be 1-{MAX_ZONE_CODE_LENGTH} letters or digits."
         if len(parts[3]) != 4:
             return "Local macroblock must be 4 characters (e.g. B4A4)."
-        if not re.match(r"^[A-J]\d[A-J]\d$", parts[3], re.IGNORECASE):
+        if not LOCAL_MACROBLOCK_RE.match(parts[3]):
             return "Local macroblock format: letter-digit-letter-digit (e.g. B4A4)."
-        if len(parts[4]) != 4 or not re.match(r"^\d{4}$", parts[4]):
+        if not MICROSPOT_RE.match(parts[4]):
             return "Microspot must be 4 digits (e.g. 2798)."
         return None
 
@@ -383,22 +342,22 @@ def validate_lap_code(query: str) -> str | None:
             admin2 = state.oglap_country_regions_reverse.get(parts[1])
             if not admin2:
                 return 'Unknown region code "%s". Use a valid ADMIN_LEVEL_2 code (e.g. CKY).' % parts[1]
-            if len(parts[2]) != 6 or not re.match(r"^[A-Z]{6}$", parts[2]):
+            if not NATIONAL_MACROBLOCK_RE.match(parts[2]):
                 return "National macroblock must be 6 letters (e.g. ABCDEF)."
-            if len(parts[3]) != 4 or not re.match(r"^\d{4}$", parts[3]):
+            if not MICROSPOT_RE.match(parts[3]):
                 return "Microspot must be 4 digits (e.g. 2798)."
             return None
         # Local without CC: ADMIN2-ADMIN3-MACRO4-MICRO
         admin2 = state.oglap_country_regions_reverse.get(parts[0])
         if not admin2:
             return 'Unknown region code "%s". Use a valid ADMIN_LEVEL_2 code (e.g. CKY).' % parts[0]
-        if not parts[1] or len(parts[1]) < 1:
-            return "Zone (ADMIN_LEVEL_3) code is required."
+        if not _is_valid_zone_code(parts[1]):
+            return f"Zone (ADMIN_LEVEL_3) code must be 1-{MAX_ZONE_CODE_LENGTH} letters or digits."
         if len(parts[2]) != 4:
             return "Local macroblock must be 4 characters (e.g. B4A4)."
-        if not re.match(r"^[A-J]\d[A-J]\d$", parts[2], re.IGNORECASE):
+        if not LOCAL_MACROBLOCK_RE.match(parts[2]):
             return "Local macroblock format: letter-digit-letter-digit (e.g. B4A4)."
-        if len(parts[3]) != 4 or not re.match(r"^\d{4}$", parts[3]):
+        if not MICROSPOT_RE.match(parts[3]):
             return "Microspot must be 4 digits (e.g. 2798)."
         return None
 
@@ -409,35 +368,32 @@ def validate_lap_code(query: str) -> str | None:
             admin2 = state.oglap_country_regions_reverse.get(parts[1])
             if not admin2:
                 return 'Unknown region code "%s". Use a valid ADMIN_LEVEL_2 code (e.g. CKY).' % parts[1]
-            if not parts[2] or len(parts[2]) < 1:
-                return "Zone code is required."
+            if not _is_valid_zone_code(parts[2]):
+                return f"Zone code must be 1-{MAX_ZONE_CODE_LENGTH} letters or digits."
             return None
         # National without CC: ADMIN2-XXXYYY-MICRO
         admin2 = state.oglap_country_regions_reverse.get(parts[0])
         if (
             admin2
-            and len(parts[1]) == 6
-            and re.match(r"^[A-Z]{6}$", parts[1])
-            and len(parts[2]) == 4
-            and re.match(r"^\d{4}$", parts[2])
+            and NATIONAL_MACROBLOCK_RE.match(parts[1])
+            and MICROSPOT_RE.match(parts[2])
         ):
             return None
-        # Could be zone search without CC — fall through
         if admin2:
-            return None  # loose zone search
+            return "Three-segment codes without a country prefix must be national LAPs: ADMIN2-XXXXXX-1234."
         return 'Unknown region code "%s". Use a valid ADMIN_LEVEL_2 code (e.g. CKY).' % parts[0]
 
     if len(parts) == 2:
         admin2 = state.oglap_country_regions_reverse.get(parts[0])
         if not admin2:
             return 'Unknown region code "%s". Use e.g. CKY QKAR.' % parts[0]
-        if not parts[1] or len(parts[1]) > 4:
-            return "Zone code must be 1\u20134 characters."
+        if not _is_valid_zone_code(parts[1]):
+            return f"Zone code must be 1-{MAX_ZONE_CODE_LENGTH} letters or digits."
         return None
 
     if len(parts) == 1:
-        if len(parts[0]) > 4:
-            return "Zone code only must be 1\u20134 characters (e.g. QKAR)."
+        if not _is_valid_zone_code(parts[0]):
+            return f"Zone code only must be 1-{MAX_ZONE_CODE_LENGTH} letters or digits (e.g. QKAR)."
         return None
 
     return "Invalid LAP or zone format. Use full LAP (GN-CKY-...), or zone code (e.g. QKAR)."
@@ -471,10 +427,9 @@ def get_place_by_lap_code(query: str) -> dict[str, Any] | None:
         place = index.get(key)
     elif parsed.get("admin_level_3_code"):
         suffix = f"_{parsed['admin_level_3_code']}"
-        for k, p in index.items():
-            if k.endswith(suffix):
-                place = p
-                break
+        matches = sorted(k for k in index if k.endswith(suffix))
+        if matches:
+            place = index[matches[0]]
 
     if not place:
         return None
@@ -525,7 +480,7 @@ def lap_to_coordinates(lap_code: str) -> dict[str, float] | None:
 
     from ._constants import NATIONAL_CELL_SIZE_M, NATIONAL_MICRO_SCALE
 
-    m_per_lat = meters_per_degree_lat()
+    m_per_lat = meters_per_degree_lat(origin_lat)
     is_national = len(parsed["macroblock"]) == 6
     cell_size = NATIONAL_CELL_SIZE_M if is_national else 100
     micro_scale = NATIONAL_MICRO_SCALE if is_national else 1
@@ -534,7 +489,19 @@ def lap_to_coordinates(lap_code: str) -> dict[str, float] | None:
     north_m = macro["blockNorth"] * cell_size + micro["northM"] * micro_scale
     lat = origin_lat + north_m / m_per_lat
     lon = origin_lon + east_m / meters_per_degree_lon(origin_lat)
+    if lon > 180:
+        lon -= 360
+    elif lon < -180:
+        lon += 360
     return {"lat": lat, "lon": lon}
+
+
+def _is_lon_in_country_range(lon: float) -> bool:
+    sw_lon = state.country_bounds["sw"][1]
+    ne_lon = state.country_bounds["ne"][1]
+    if state.country_crosses_antimeridian:
+        return lon >= sw_lon or lon <= ne_lon
+    return sw_lon <= lon <= ne_lon
 
 
 def coordinates_to_lap(lat: float, lon: float) -> dict[str, Any] | None:
@@ -545,10 +512,23 @@ def coordinates_to_lap(lat: float, lon: float) -> dict[str, Any] | None:
     if not state.initialized:
         raise RuntimeError("OGLAP not initialized. Call init_oglap() with a valid profile and localities naming first.")
 
+    if not isinstance(lat, (int, float)) or not isinstance(lon, (int, float)):
+        return None
+    lat = float(lat)
+    lon = float(lon)
+    if not math.isfinite(lat) or not math.isfinite(lon):
+        return None
+    if lat < -90 or lat > 90 or lon < -180 or lon > 180:
+        return None
+    if state.country_crosses_antimeridian and lon == -180:
+        lon = 180
+
     # Fast reject: outside bounding box
     sw = state.country_bounds["sw"]
     ne = state.country_bounds["ne"]
-    if lat < sw[0] or lat > ne[0] or lon < sw[1] or lon > ne[1]:
+    if lat < sw[0] or lat > ne[0]:
+        return None
+    if not _is_lon_in_country_range(lon):
         return None
 
     # Precise reject: outside country border polygon

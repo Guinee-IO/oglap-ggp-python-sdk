@@ -1,0 +1,19 @@
+# Runtime-downloaded reference data (cached by init_oglap)
+oglap-data/
+
+# Python build & cache
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+
+# Editor & OS
+.DS_Store
+.idea/
+.vscode/

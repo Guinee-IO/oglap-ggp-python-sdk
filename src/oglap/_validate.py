@@ -4,6 +4,8 @@ Init-time validation — validates profile + localities naming and applies engin
 
 from __future__ import annotations
 
+import math
+import re
 from typing import Any
 
 from ._constants import PACKAGE_VERSION
@@ -167,6 +169,81 @@ def validate_and_apply(
         )
         pass_("localities.zones", f"Zone entries (levels 8/9/10): {count} total.")
 
+    # Explicit localities naming zone codes are authoritative. They must be
+    # unique within a declared parent region so local LAPs decode predictably.
+    explicit_by_region: dict[str, list[dict[str, Any]]] = {}
+    explicit_zone_count = 0
+    missing_explicit_region = 0
+    zone_code_re = re.compile(r"^[A-Z0-9]{1,8}$")
+    for table in (
+        localities_naming.get("level_8_sous_prefectures") or {},
+        localities_naming.get("level_9_villages") or {},
+        localities_naming.get("level_10_quartiers") or {},
+    ):
+        for entry in table.values():
+            if not isinstance(entry, dict):
+                continue
+            raw_code = entry.get("oglap_code")
+            code = raw_code.strip().upper() if isinstance(raw_code, str) else ""
+            if not code:
+                continue
+            explicit_zone_count += 1
+            if not zone_code_re.match(code):
+                fail("localities.zone_code.format", f'Invalid explicit zone code "{raw_code}" for place_id={entry.get("place_id", "(unknown)")}. Codes must be 1-8 uppercase letters/digits.')
+                continue
+            region_iso = entry.get("parent_region_iso")
+            if not region_iso:
+                missing_explicit_region += 1
+                continue
+            key = f"{region_iso}_{code}"
+            explicit_by_region.setdefault(key, []).append(entry)
+
+    explicit_collisions = [(key, entries) for key, entries in explicit_by_region.items() if len(entries) > 1]
+    if explicit_collisions:
+        key, entries = explicit_collisions[0]
+        ids = ", ".join(str(e.get("place_id", "(unknown)")) for e in entries)
+        fail("localities.zone_code.unique", f"Duplicate explicit zone code in parent region ({key}): place_ids {ids}. Explicit zone codes must be unique within an ADMIN_LEVEL_2 region.")
+    elif explicit_zone_count > 0:
+        pass_("localities.zone_code.unique", f"No duplicate explicit zone codes found within declared parent regions ({explicit_zone_count} entries scanned).")
+    if missing_explicit_region > 0:
+        warn("localities.zone_code.parent_region", f"{missing_explicit_region} explicit zone code entries have no parent_region_iso; uniqueness will be resolved from place geometry at load time.")
+
+    def _valid_lat_lon_pair(value: Any) -> bool:
+        return (
+            isinstance(value, list)
+            and len(value) == 2
+            and isinstance(value[0], (int, float))
+            and isinstance(value[1], (int, float))
+            and math.isfinite(value[0])
+            and math.isfinite(value[1])
+            and -90 <= value[0] <= 90
+            and -180 <= value[1] <= 180
+        )
+
+    csw = extent.get("country_sw")
+    bounds = extent.get("country_bounds") or {}
+    bsw = bounds.get("sw")
+    bne = bounds.get("ne")
+    if not _valid_lat_lon_pair(csw):
+        fail("profile.country_extent.country_sw", f"country_sw must be [lat, lon] with finite numbers in WGS84 range. Got: {csw!r}.")
+    if not _valid_lat_lon_pair(bsw):
+        fail("profile.country_extent.country_bounds.sw", f"country_bounds.sw must be [lat, lon]. Got: {bsw!r}.")
+    if not _valid_lat_lon_pair(bne):
+        fail("profile.country_extent.country_bounds.ne", f"country_bounds.ne must be [lat, lon]. Got: {bne!r}.")
+    if _valid_lat_lon_pair(bsw) and _valid_lat_lon_pair(bne) and bne[0] < bsw[0]:
+        fail("profile.country_extent.country_bounds", f"country_bounds.ne.lat ({bne[0]}) must be \u2265 country_bounds.sw.lat ({bsw[0]}). Lon may wrap (antimeridian), but lat must not.")
+
+    requested_mode = (profile.get("grid_settings") or {}).get("distance_mode")
+    if requested_mode is None:
+        validated_distance_mode = "flat"
+        pass_("grid_settings.distance_mode", 'distance_mode not specified \u2014 defaulting to "flat" (backward-compatible).')
+    elif requested_mode in ("flat", "wgs84_ellipsoid"):
+        validated_distance_mode = requested_mode
+        pass_("grid_settings.distance_mode", f'Distance mode: "{requested_mode}".')
+    else:
+        validated_distance_mode = "flat"
+        fail("grid_settings.distance_mode", f'Unknown distance_mode "{requested_mode}". Must be one of: "flat", "wgs84_ellipsoid". A typo here would silently shift every LAP code, so init refuses to start.')
+
     # ── If any fatal check, abort ─────────────────────────────────
     if fatal:
         return {
@@ -192,6 +269,7 @@ def validate_and_apply(
 
     # Cache zone codes by ID (levels 8, 9, 10)
     state.oglap_zone_codes_by_id.clear()
+    state.oglap_explicit_zone_codes_by_region.clear()
     zones_list = (
         list((localities_naming.get("level_8_sous_prefectures") or {}).values())
         + list((localities_naming.get("level_9_villages") or {}).values())
@@ -202,12 +280,16 @@ def validate_and_apply(
             continue
         pid = z.get("place_id")
         code = z.get("oglap_code")
-        if pid and code:
-            state.oglap_zone_codes_by_id[str(pid)] = code
+        if pid is not None and code:
+            normalized_code = str(code).strip().upper()
+            state.oglap_zone_codes_by_id[str(pid)] = normalized_code
             try:
-                state.oglap_zone_codes_by_id[int(pid)] = code
+                state.oglap_zone_codes_by_id[int(pid)] = normalized_code
             except (ValueError, TypeError):
                 pass
+            region_iso = z.get("parent_region_iso")
+            if region_iso:
+                state.oglap_explicit_zone_codes_by_region.setdefault(region_iso, set()).add(normalized_code)
 
     prefix_map = dict(zone_naming.get("type_prefix_map") or {})
     state.zone_type_prefix_default = prefix_map.pop("default", "Z")
@@ -218,17 +300,15 @@ def validate_and_apply(
     )
     state.ggp_pad_char = zone_naming.get("padding_char") or "X"
 
-    state.country_sw = extent.get("country_sw") or [7.19, -15.37]
-    bounds = extent.get("country_bounds") or {}
-    state.country_bounds = {
-        "sw": bounds.get("sw") or [7.19, -15.37],
-        "ne": bounds.get("ne") or [12.68, -7.64],
-    }
+    state.country_sw = list(csw)
+    state.country_bounds = {"sw": list(bsw), "ne": list(bne)}
     state.meters_per_degree_lat = (
         (profile.get("grid_settings") or {})
         .get("distance_conversion", {})
         .get("meters_per_degree_lat", 111_320)
     )
+    state.distance_mode = validated_distance_mode
+    state.country_crosses_antimeridian = state.country_bounds["ne"][1] < state.country_bounds["sw"][1]
 
     bounds_arr = [state.country_bounds["sw"], state.country_bounds["ne"]]
 

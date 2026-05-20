@@ -504,6 +504,8 @@ If `init_oglap()` fails with a compatibility error, either downgrade the SDK or 
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+MIT, with one additional requirement — see [LICENSE](LICENSE) for the full text.
+
+**Attribution.** If you ship a product, service, app, library, or dataset that uses this SDK (in whole, in part, or modified), please include a visible mention that it uses the **OGLAP** protocol — in your README, an About / Credits screen, or any equivalent location end users and contributors can see. A link to the project is appreciated where it's practical.
 
 Issues and contributions: <https://github.com/Guinee-IO/oglap-ggp-python-sdk/issues>

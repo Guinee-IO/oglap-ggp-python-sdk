@@ -315,7 +315,7 @@ from oglap import (
 )
 
 check_oglap()              # → rapport d'initialisation (même structure)
-get_package_version()      # → '0.1.2'
+get_package_version()      # → '2.0.0'
 get_country_code()         # → 'GN'
 get_country_sw()           # → [7.19, -15.37]
 get_country_profile()      # → dict du profil pays chargé
@@ -488,14 +488,14 @@ La suite de tests compte environ 80 tests couvrant encodage, décodage, parsing,
 
 ## Versionnage et compatibilité
 
-Le SDK déclare une plage de compatibilité avec le jeu de données du profil pays via un caret semver. Le fichier `gn_oglap_country_profile.json` actuellement publié exige que le SDK satisfasse `^0.1.0` — ce paquet suit donc la ligne 0.1.x. Les bumps majeurs du schéma du jeu de données s'accompagneront d'un bump majeur ici.
+Le SDK déclare une plage de compatibilité avec le jeu de données du profil pays via un caret semver. Le fichier `gn_oglap_country_profile.json` actuellement publié exige que le SDK satisfasse `^2.0.0` — ce paquet suit donc la ligne 2.x. Les bumps majeurs du schéma du jeu de données s'accompagneront d'un bump majeur ici.
 
 Vous pouvez inspecter la plage de compatibilité chargée à l'exécution :
 
 ```python
 from oglap import get_country_profile
 print(get_country_profile()["compatibility"])
-# {'oglap_package_range': '^0.1.0', 'dataset_versions': ['2026-02-21T14:13:02.414Z']}
+# {'oglap_package_range': '^2.0.0', 'dataset_versions': ['2026-02-21T14:13:02.414Z']}
 ```
 
 Si `init_oglap()` échoue avec une erreur de compatibilité, rétrogradez le SDK ou mettez à jour votre jeu de données en cache (`force_download=True`).

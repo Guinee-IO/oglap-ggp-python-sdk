@@ -315,7 +315,7 @@ from oglap import (
 )
 
 check_oglap()              # → init report (same shape init_oglap returned)
-get_package_version()      # → '0.1.2'
+get_package_version()      # → '2.0.0'
 get_country_code()         # → 'GN'
 get_country_sw()           # → [7.19, -15.37]
 get_country_profile()      # → the loaded country profile dict
@@ -488,14 +488,14 @@ The test suite is ~80 tests covering encoding, decoding, parsing, validation, an
 
 ## Versioning & compatibility
 
-The SDK declares a compatibility range with the country-profile dataset via a semver caret. The currently published `gn_oglap_country_profile.json` requires the SDK to satisfy `^0.1.0` — so this package follows the 0.1.x line. Major bumps in the dataset schema will be accompanied by a major bump here.
+The SDK declares a compatibility range with the country-profile dataset via a semver caret. The currently published `gn_oglap_country_profile.json` requires the SDK to satisfy `^2.0.0` — so this package follows the 2.x line. Major bumps in the dataset schema will be accompanied by a major bump here.
 
 You can inspect the loaded compatibility range at runtime:
 
 ```python
 from oglap import get_country_profile
 print(get_country_profile()["compatibility"])
-# {'oglap_package_range': '^0.1.0', 'dataset_versions': ['2026-02-21T14:13:02.414Z']}
+# {'oglap_package_range': '^2.0.0', 'dataset_versions': ['2026-02-21T14:13:02.414Z']}
 ```
 
 If `init_oglap()` fails with a compatibility error, either downgrade the SDK or update your cached dataset (`force_download=True`).

@@ -74,7 +74,7 @@ def _synthetic_profile():
     return {
         "schema_id": "oglap.country_profile.v2",
         "meta": {"country_oglap_code": "TS", "iso_alpha_2": "TS", "country_name": "Testland"},
-        "compatibility": {"oglap_package_range": "^0.1.0", "dataset_versions": ["synthetic-v1"]},
+        "compatibility": {"oglap_package_range": "^2.0.0", "dataset_versions": ["synthetic-v1"]},
         "country_extent": {"country_sw": [0, 0], "country_bounds": {"sw": [0, 0], "ne": [1, 1]}},
         "grid_settings": {"distance_conversion": {"meters_per_degree_lat": 111320}},
         "zone_naming": {"type_prefix_map": {"default": "Z", "administrative": "Z"}, "stopwords": [], "padding_char": "X"},
@@ -542,7 +542,7 @@ def _synthetic_profile_antimeridian():
     return {
         "schema_id": "oglap.country_profile.v2",
         "meta": {"country_oglap_code": "PC", "iso_alpha_2": "PC", "country_name": "Pacifica"},
-        "compatibility": {"oglap_package_range": "^0.1.0", "dataset_versions": ["synthetic-v1"]},
+        "compatibility": {"oglap_package_range": "^2.0.0", "dataset_versions": ["synthetic-v1"]},
         "country_extent": {"country_sw": [-21, 176], "country_bounds": {"sw": [-21, 176], "ne": [-12, -178]}},
         "grid_settings": {"distance_conversion": {"meters_per_degree_lat": 111320}},
         "zone_naming": {"type_prefix_map": {"default": "Z", "administrative": "Z"}, "stopwords": [], "padding_char": "X"},
@@ -1190,7 +1190,7 @@ def _high_lat_profile():
     return {
         "schema_id": "oglap.country_profile.v2",
         "meta": {"country_oglap_code": "NL", "iso_alpha_2": "NL", "country_name": "NorthLand"},
-        "compatibility": {"oglap_package_range": "^0.1.0", "dataset_versions": ["synthetic-v1"]},
+        "compatibility": {"oglap_package_range": "^2.0.0", "dataset_versions": ["synthetic-v1"]},
         "country_extent": {"country_sw": [55, 10], "country_bounds": {"sw": [55, 10], "ne": [65, 20]}},
         "grid_settings": {
             "distance_mode": "wgs84_ellipsoid",

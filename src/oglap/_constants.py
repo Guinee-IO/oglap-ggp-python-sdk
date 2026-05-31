@@ -5,7 +5,7 @@ OGLAP SDK constants — grid parameters, S3 URLs, encoding tables.
 from __future__ import annotations
 
 # --- Package identity ---
-PACKAGE_VERSION = "0.1.2"
+PACKAGE_VERSION = "2.0.0"
 
 # --- Remote data ---
 OGLAP_S3_BASE = "https://s3.guinee.io/oglap/ggp"

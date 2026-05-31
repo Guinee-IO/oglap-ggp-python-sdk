@@ -11,6 +11,7 @@ from typing import Any
 
 from shapely.geometry import Point, shape
 
+from ._grid import wrap_lon
 from ._state import state
 
 
@@ -29,13 +30,6 @@ def bbox_from_geometry(geometry: dict[str, Any] | None) -> list[float] | None:
     raw_min = math.inf
     raw_max = -math.inf
     lons: list[float] = []
-
-    def wrap_lon(lon: float) -> float:
-        while lon > 180:
-            lon -= 360
-        while lon < -180:
-            lon += 360
-        return lon
 
     def add(lon: float, lat: float) -> None:
         nonlocal min_lat, max_lat, raw_min, raw_max
@@ -62,13 +56,19 @@ def bbox_from_geometry(geometry: dict[str, Any] | None) -> list[float] | None:
 
     if geo_type == "Point":
         add_coord(coords)
-    elif geo_type == "Polygon":
+    elif geo_type == "Polygon" and isinstance(coords, (list, tuple)):
         for ring in coords:
+            if not isinstance(ring, (list, tuple)):
+                continue
             for p in ring:
                 add_coord(p)
-    elif geo_type == "MultiPolygon":
+    elif geo_type == "MultiPolygon" and isinstance(coords, (list, tuple)):
         for poly in coords:
+            if not isinstance(poly, (list, tuple)):
+                continue
             for ring in poly:
+                if not isinstance(ring, (list, tuple)):
+                    continue
                 for p in ring:
                     add_coord(p)
 
@@ -212,16 +212,45 @@ def point_in_geometry(lon: float, lat: float, geometry: dict[str, Any] | None) -
 
 # ── Area (for sorting by smallest containing polygon) ───────────────
 
-def compute_area(geometry: dict[str, Any]) -> float:
-    """Planar area of a GeoJSON geometry (in square-degrees).
+_WGS84_RADIUS = 6_378_137.0
 
-    This is only used for *relative* ordering (smallest containing polygon),
-    so planar area in degree-space gives the same sort order as geodesic area.
-    """
-    poly = _get_closed_shape(geometry)
-    if poly is None:
+
+def _ring_area(ring: Any) -> float:
+    """Spherical ring area matching Turf/Dart ordering semantics."""
+    if not isinstance(ring, (list, tuple)) or len(ring) < 3:
         return 0.0
+    total = 0.0
     try:
-        return poly.area
-    except Exception:
+        for i, p1 in enumerate(ring):
+            p2 = ring[(i + 1) % len(ring)]
+            lon1, lat1 = float(p1[0]), float(p1[1])
+            lon2, lat2 = float(p2[0]), float(p2[1])
+            total += math.radians(lon2 - lon1) * (
+                2.0 + math.sin(math.radians(lat1)) + math.sin(math.radians(lat2))
+            )
+    except (IndexError, TypeError, ValueError):
         return 0.0
+    return abs(total * _WGS84_RADIUS * _WGS84_RADIUS / 2.0)
+
+
+def _polygon_area(coords: Any) -> float:
+    if not isinstance(coords, (list, tuple)) or not coords:
+        return 0.0
+    return _ring_area(coords[0]) - sum(_ring_area(ring) for ring in coords[1:])
+
+
+def compute_area(geometry: dict[str, Any]) -> float:
+    """Spherical GeoJSON area used to choose the smallest containing polygon.
+
+    Node uses Turf area and Dart uses the equivalent spherical formula. Matching
+    that model here prevents Python from choosing a different zone origin when
+    overlapping polygons have a different planar-versus-spherical ordering.
+    """
+    if not isinstance(geometry, dict):
+        return 0.0
+    coords = geometry.get("coordinates")
+    if geometry.get("type") == "Polygon":
+        return _polygon_area(coords)
+    if geometry.get("type") == "MultiPolygon" and isinstance(coords, (list, tuple)):
+        return sum(_polygon_area(poly) for poly in coords)
+    return 0.0

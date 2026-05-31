@@ -42,6 +42,7 @@ from oglap import (
     parse_lap_code,
     validate_lap_code,
 )
+from oglap._grid import compute_lap, encode_alpha3
 
 
 DATA_DIR = Path(__file__).resolve().parents[1] / "oglap-data" / "latest"
@@ -508,10 +509,10 @@ class TestDeterminismParity:
     async def test_strict_parse_rejects_trailing_junk_and_bad_microspots(self):
         await _load_real_fixture()
         invalids = [
-            "GN-CON-QCL0-A2A3-6041-extra",
+            "GN-CON-QCL0-A2A3-5940-extra",
             "GN-CON-QCL0-A2A3-ABCD",
             "GN-CON-QCL0-K2A3-6041",
-            "GN-CON-QCL0-A2A3-60411",
+            "GN-CON-QCL0-A2A3-59401",
         ]
         for lap in invalids:
             assert parse_lap_code(lap) is None
@@ -568,11 +569,11 @@ class TestRealFixtureDeterminism:
     """Mirror of JS testRealFixtureDeterminism — canonical LAP codes must hold."""
 
     EXPECTED = [
-        ("Conakry center", 9.5370, -13.6785, "GN-CON-QCL0-A2A3-6041"),
-        ("Nzerekore", 7.7562, -8.8179, "GN-NZE-QKLN-A1A2-9149"),
-        ("Kankan", 10.3854, -9.3057, "GN-KAN-QFR1-A8A3-4463"),
+        ("Conakry center", 9.5370, -13.6785, "GN-CON-QCL0-A2A3-5940"),
+        ("Nzerekore", 7.7562, -8.8179, "GN-NZE-QKLN-A1A2-9049"),
+        ("Kankan", 10.3854, -9.3057, "GN-KAN-QFR1-A8A3-4363"),
         ("Labe", 11.3183, -12.2860, "GN-LAB-QKRL-A6B6-0978"),
-        ("Kindia", 10.0565, -12.8665, "GN-KIN-QFS0-B3B0-4495"),
+        ("Kindia", 10.0565, -12.8665, "GN-KIN-QFS0-B3B0-4494"),
         ("Rural Siguiri", 11.70, -9.30, "GN-KAN-JXVHLC-9853"),
         ("Rural Macenta", 8.40, -9.40, "GN-NZE-JTPBZU-5497"),
         ("Rural Boke", 11.20, -14.20, "GN-BOK-BXSGPR-2093"),
@@ -600,7 +601,7 @@ class TestStrictParsing:
     @pytest.mark.asyncio
     async def test_strict_parse_invalids(self):
         await _load_real_fixture()
-        assert parse_lap_code("GN-CON-QCL0-A2A3-6041-extra") is None
+        assert parse_lap_code("GN-CON-QCL0-A2A3-5940-extra") is None
         assert parse_lap_code("GN-CON-QCL0-A2A3-1A23") is None
         assert parse_lap_code("GN-CON-QCL0-Z2A3-1234") is None
         assert (
@@ -777,8 +778,8 @@ class TestDecodedPointReEncodesToSameLap:
     async def test_decoded_point_re_encodes(self):
         await _load_real_fixture()
         for lap in (
-            "GN-CON-QCL0-A2A3-6041",
-            "GN-NZE-QKLN-A1A2-9149",
+            "GN-CON-QCL0-A2A3-5940",
+            "GN-NZE-QKLN-A1A2-9049",
             "GN-KAN-JXVHLC-9853",
             "GN-FAR-HMDEUP-3241",
         ):
@@ -799,9 +800,9 @@ class TestParseLapCodeRejectsBadInput:
             "GN-CON-QCL0-A2A3",
             "GN-CON-QCL0-A2A3-XXXX",
             "GN-CON-QCL0-K2A3-6041",
-            "GN-CON-QCL0-A2A3-60411",
+            "GN-CON-QCL0-A2A3-59401",
             "GN-XX-ABCDEF-1234",
-            "GN-CON-QCL0-A2A3-6041-extra",
+            "GN-CON-QCL0-A2A3-5940-extra",
             "GN-CON-QCL0-2A3-6041",
             "GN-CON-QCL0-A2A3-ABCD",
         ]
@@ -826,8 +827,8 @@ class TestLapToCoordinatesAcceptsOptionalCountryPrefix:
     @pytest.mark.asyncio
     async def test_lap_to_coords_with_and_without_cc(self):
         await _load_real_fixture()
-        with_cc = lap_to_coordinates("GN-CON-QCL0-A2A3-6041")
-        without_cc = lap_to_coordinates("CON-QCL0-A2A3-6041")
+        with_cc = lap_to_coordinates("GN-CON-QCL0-A2A3-5940")
+        without_cc = lap_to_coordinates("CON-QCL0-A2A3-5940")
         assert with_cc and without_cc
         assert with_cc["lat"] == without_cc["lat"]
         assert with_cc["lon"] == without_cc["lon"]
@@ -1049,9 +1050,9 @@ class TestRTreeCorrectness:
     async def test_canonical_truth(self):
         await _load_real_fixture()
         truth = [
-            (9.5370, -13.6785, "GN-CON-QCL0-A2A3-6041"),
-            (7.7562, -8.8179, "GN-NZE-QKLN-A1A2-9149"),
-            (10.3854, -9.3057, "GN-KAN-QFR1-A8A3-4463"),
+            (9.5370, -13.6785, "GN-CON-QCL0-A2A3-5940"),
+            (7.7562, -8.8179, "GN-NZE-QKLN-A1A2-9049"),
+            (10.3854, -9.3057, "GN-KAN-QFR1-A8A3-4363"),
         ]
         for lat, lon, expected in truth:
             r = coordinates_to_lap(lat, lon)
@@ -1321,11 +1322,11 @@ class TestEllipsoidModeDoesNotAffectFlatModeCodes:
     async def test_flat_mode_codes_unchanged(self):
         await _load_real_fixture()
         expected = [
-            "GN-CON-QCL0-A2A3-6041",
-            "GN-NZE-QKLN-A1A2-9149",
-            "GN-KAN-QFR1-A8A3-4463",
+            "GN-CON-QCL0-A2A3-5940",
+            "GN-NZE-QKLN-A1A2-9049",
+            "GN-KAN-QFR1-A8A3-4363",
             "GN-LAB-QKRL-A6B6-0978",
-            "GN-KIN-QFS0-B3B0-4495",
+            "GN-KIN-QFS0-B3B0-4494",
         ]
         coords = [
             (9.5370, -13.6785), (7.7562, -8.8179), (10.3854, -9.3057),
@@ -1389,4 +1390,189 @@ class TestEllipsoidModeIsMoreAccurateThanFlat:
         d_lat = abs(lat - dec["lat"]) * 110575
         d_lon = abs(lon - dec["lon"]) * 110575 * math.cos(lat * math.pi / 180.0)
         dist = math.sqrt(d_lat * d_lat + d_lon * d_lon)
-        assert dist < 1.0, f"ellipsoid round-trip distance {dist:.3f}m exceeds 1m"
+        # SW-anchored microspot semantics: encode = floor (cell containment),
+        # decode = the cell's SW corner. The decoded point is therefore the SW
+        # corner of the 1 m cell that contains the input, so the input is at most
+        # one cell-diagonal (sqrt(2) ~= 1.414 m) away. This bound is the grid
+        # quantization, not the projection error — ellipsoid mode still reduces
+        # the projection component vs flat mode.
+        assert dist < 1.45, f"ellipsoid round-trip distance {dist:.3f}m exceeds one grid cell"
+        # The meaningful invariant: the decoded point re-encodes to the same cell.
+        assert coordinates_to_lap(dec["lat"], dec["lon"])["lapCode"] == enc["lapCode"]
+
+
+# ════════════════════════════════════════════════════════════════════
+#  Microspot SW-anchored floor-containment — semantic contract tests.
+#
+#  These are the guards that would have caught the round()-instead-of-floor()
+#  bug. They assert the GRID SEMANTICS directly (not just round-trip stability
+#  or sub-meter distance, both of which a half-cell-shifted encoder satisfies):
+#    1. microspot index N covers [N, N+1) m  → encode is floor, not round
+#    2. microspot 0000's SW corner == macroblock SW corner (no half-cell offset)
+#    3. an exact cell boundary belongs to the upper cell
+#  The offsets below include the .6 m / .4 m cases where floor and round differ.
+# ════════════════════════════════════════════════════════════════════
+
+class TestMicrospotFloorContainment:
+    LAT0 = 0.5
+    LON0 = 0.5
+
+    async def _load_zone(self):
+        await init_oglap(_synthetic_profile(), _synthetic_localities())
+        zone = {
+            "place_id": 200,
+            "type": "administrative",
+            "extratags": {"admin_level": "10", "name": "Acc Zone"},
+            "address": {
+                "neighbourhood": "Acc Zone", "county": "Alpha Prefecture", "state": "Alpha",
+                "ISO3166-2-Lvl6": "TS-AA", "ISO3166-2-Lvl4": "TS-A", "country": "Testland",
+            },
+            # bbox SW corner = (LAT0, LON0) → local-grid origin.
+            "geojson": _polygon(self.LON0, self.LAT0, self.LON0 + 0.01, self.LAT0 + 0.01),
+        }
+        assert load_oglap(_base_places([zone]))["ok"]
+
+    def _point_at(self, off_e_m, off_n_m):
+        m_per_lat = 111320.0
+        m_per_lon = 111320.0 * math.cos(self.LAT0 * math.pi / 180.0)
+        return (self.LAT0 + off_n_m / m_per_lat, self.LON0 + off_e_m / m_per_lon)
+
+    @pytest.mark.asyncio
+    async def test_microspot_is_floor_not_round(self):
+        await self._load_zone()
+        # (east_offset_m, north_offset_m, expected_east_idx, expected_north_idx)
+        # round() would give 1/41/60 for the .6 cases — floor must give 0/40/59.
+        cases = [
+            (0.3, 0.3, 0, 0),
+            (0.6, 0.6, 0, 0),     # round -> 1,1 ; floor -> 0,0
+            (1.4, 1.4, 1, 1),
+            (1.6, 2.6, 1, 2),     # round -> 2,3
+            (59.6, 40.6, 59, 40), # the canonical Conakry-style shift (6041 vs 5940)
+        ]
+        for off_e, off_n, exp_e, exp_n in cases:
+            lat, lon = self._point_at(off_e, off_n)
+            r = coordinates_to_lap(lat, lon)
+            assert r is not None and not r["isNationalGrid"], f"({off_e},{off_n}) not local"
+            assert r["microspot"] == f"{exp_e:02d}{exp_n:02d}", (
+                f"offset ({off_e},{off_n}) m -> microspot {r['microspot']}, "
+                f"expected {exp_e:02d}{exp_n:02d} (floor; round would inflate)"
+            )
+
+    @pytest.mark.asyncio
+    async def test_microspot_0000_decodes_to_macroblock_sw_corner(self):
+        await self._load_zone()
+        # A point in the SW 1x1 m cell encodes to microspot 0000 ...
+        lat, lon = self._point_at(0.3, 0.3)
+        r = coordinates_to_lap(lat, lon)
+        assert r is not None and r["microspot"] == "0000"
+        # ... and decoding it returns the macroblock SW corner (origin), NOT a
+        # half-cell-offset centre. SW corner here is the zone origin (LAT0, LON0)
+        # because the point is in block 0, cell 0.
+        dec = lap_to_coordinates(r["lapCode"])
+        assert dec is not None
+        assert abs(dec["lat"] - self.LAT0) < 1e-7, f"0000 north not at SW corner: {dec['lat']}"
+        assert abs(dec["lon"] - self.LON0) < 1e-7, f"0000 east not at SW corner: {dec['lon']}"
+
+    @pytest.mark.asyncio
+    async def test_cell_boundary_belongs_to_upper_cell(self):
+        await self._load_zone()
+        # A point exactly 1 m east / 2 m north of the origin sits on the cell
+        # boundary; with floor semantics it belongs to the upper cell (01 / 02).
+        lat, lon = self._point_at(1.0, 2.0)
+        r = coordinates_to_lap(lat, lon)
+        assert r is not None
+        assert r["microspot"] == "0102", f"boundary point -> {r['microspot']}, expected 0102"
+
+    @pytest.mark.asyncio
+    async def test_tiny_negative_sw_tolerance_clamps_to_origin(self):
+        await self._load_zone()
+        raw_offset_m = -0.00015
+        lat, lon = self._point_at(raw_offset_m, raw_offset_m)
+        r = compute_lap(lat, lon, self.LAT0, self.LON0, "AAA", "QACC")
+        assert r is not None
+        assert r["macroblock"] == "A0A0"
+        assert r["microspot"] == "0000"
+
+
+class TestPrecisionResilience:
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("bad", [0, -1, float("nan"), "111320"])
+    async def test_invalid_meters_per_degree_lat_rejected(self, bad):
+        profile = _synthetic_profile()
+        profile["grid_settings"]["distance_conversion"]["meters_per_degree_lat"] = bad
+        report = await init_oglap(profile, _synthetic_localities())
+        assert report["ok"] is False
+        assert "finite positive number" in report["error"]
+
+    @pytest.mark.asyncio
+    async def test_malformed_nested_config_rejected_without_throwing(self):
+        profile = _synthetic_profile()
+        profile["meta"] = []
+        profile["grid_settings"]["distance_conversion"] = []
+        localities = _synthetic_localities()
+        localities["level_9_villages"] = []
+        report = await init_oglap(profile, localities)
+        assert report["ok"] is False
+        assert "must be a valid object" in report["error"]
+
+    @pytest.mark.asyncio
+    async def test_large_national_decode_longitude_is_wrapped(self):
+        profile = _synthetic_profile()
+        profile["country_extent"] = {
+            "country_sw": [89, 0],
+            "country_bounds": {"sw": [89, 0], "ne": [90, 1]},
+        }
+        report = await init_oglap(profile, _synthetic_localities())
+        assert report["ok"] is True, report.get("error")
+        decoded = lap_to_coordinates("TS-AAA-ZZZAAA-0000")
+        assert decoded is not None
+        assert -180 <= decoded["lon"] <= 180
+
+    def test_bbox_huge_longitude_is_bounded(self):
+        bbox = bbox_from_geometry({"type": "Point", "coordinates": [1e308, 0]})
+        assert bbox is not None
+        assert -180 <= bbox[2] <= 180
+        assert bbox_from_geometry({"type": "Polygon", "coordinates": ["bad"]}) is None
+
+    def test_alpha3_handles_infinity(self):
+        assert encode_alpha3(float("inf")) == "AAA"
+
+    @pytest.mark.asyncio
+    async def test_overlap_selection_uses_spherical_area(self):
+        profile = _synthetic_profile()
+        profile["country_extent"] = {
+            "country_sw": [0, 0],
+            "country_bounds": {"sw": [0, 0], "ne": [70, 2]},
+        }
+        report = await init_oglap(profile, _synthetic_localities())
+        assert report["ok"] is True, report.get("error")
+        address = {
+            "county": "Alpha Prefecture",
+            "state": "Alpha",
+            "ISO3166-2-Lvl6": "TS-AA",
+            "ISO3166-2-Lvl4": "TS-A",
+            "country": "Testland",
+        }
+        places = [
+            {**place, "geojson": _polygon(0, 0, 2, 70)}
+            for place in _base_places([])
+        ]
+        places.extend([
+            {
+                "place_id": 100,
+                "type": "administrative",
+                "extratags": {"admin_level": "10", "name": "Polar Strip"},
+                "address": {**address, "neighbourhood": "Polar Strip"},
+                "geojson": _polygon(0, 60, 2, 70),
+            },
+            {
+                "place_id": 101,
+                "type": "administrative",
+                "extratags": {"admin_level": "10", "name": "Meridian Strip"},
+                "address": {**address, "neighbourhood": "Meridian Strip"},
+                "geojson": _polygon(0, 0, 0.3, 62),
+            },
+        ])
+        assert load_oglap(places)["ok"]
+        result = coordinates_to_lap(60.05, 0.05)
+        assert result and result["displayName"] == "Polar Strip"

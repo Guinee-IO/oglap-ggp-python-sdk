@@ -315,7 +315,7 @@ from oglap import (
 )
 
 check_oglap()              # → init report (same shape init_oglap returned)
-get_package_version()      # → '2.0.0'
+get_package_version()      # → '2.0.1'
 get_country_code()         # → 'GN'
 get_country_sw()           # → [7.19, -15.37]
 get_country_profile()      # → the loaded country profile dict

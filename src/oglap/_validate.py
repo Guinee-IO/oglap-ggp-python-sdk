@@ -13,6 +13,11 @@ from ._semver import satisfies_caret
 from ._state import state
 
 
+def _as_dict(value: Any) -> dict[str, Any]:
+    """Return a mapping-shaped config value without trusting decoded JSON."""
+    return value if isinstance(value, dict) else {}
+
+
 def _map_from_code_table(table: dict[str, Any] | None) -> dict[str, str]:
     """Create a flat ``{iso: oglap_code}`` map from a nested profile table."""
     if not table or not isinstance(table, dict):
@@ -62,33 +67,48 @@ def validate_and_apply(
         pass_("profile.schema", f"Profile schema: {profile_schema}")
 
     # ── 2. Profile required fields ────────────────────────────────
-    meta = profile.get("meta") or {}
+    meta_raw = profile.get("meta")
+    meta = _as_dict(meta_raw)
+    if meta_raw is not None and not isinstance(meta_raw, dict):
+        fail("profile.meta", "Profile meta must be a valid object.")
     if not meta.get("country_oglap_code") and not meta.get("iso_alpha_2"):
         fail("profile.meta.country_code", "Profile meta missing both country_oglap_code and iso_alpha_2.")
     else:
         _cc = meta.get("country_oglap_code") or meta.get("iso_alpha_2")
         pass_("profile.meta.country_code", "Country code: %s" % _cc)
 
-    extent = profile.get("country_extent") or {}
+    extent_raw = profile.get("country_extent")
+    extent = _as_dict(extent_raw)
+    if extent_raw is not None and not isinstance(extent_raw, dict):
+        fail("profile.country_extent", "Profile country_extent must be a valid object.")
     if not extent.get("country_sw") or not extent.get("country_bounds"):
         fail("profile.country_extent", "Profile missing country_extent (country_sw or country_bounds).")
     else:
         pass_("profile.country_extent", "Country extent defined.")
 
-    if not profile.get("grid_settings"):
+    grid_settings_raw = profile.get("grid_settings")
+    grid_settings = _as_dict(grid_settings_raw)
+    if not grid_settings:
         fail("profile.grid_settings", "Profile missing grid_settings section.")
     else:
         pass_("profile.grid_settings", "Grid settings present.")
 
-    zone_naming = profile.get("zone_naming") or {}
-    if not zone_naming.get("type_prefix_map"):
+    zone_naming_raw = profile.get("zone_naming")
+    zone_naming = _as_dict(zone_naming_raw)
+    if zone_naming_raw is not None and not isinstance(zone_naming_raw, dict):
+        fail("profile.zone_naming", "Profile zone_naming must be a valid object.")
+    type_prefix_map = zone_naming.get("type_prefix_map")
+    if not isinstance(type_prefix_map, dict) or not type_prefix_map:
         fail("profile.zone_naming", "Profile missing zone_naming.type_prefix_map.")
     else:
         _n = len(zone_naming["type_prefix_map"])
         pass_("profile.zone_naming", "Zone naming rules loaded (%d type prefixes)." % _n)
 
     # ── 3. Package version compatibility ──────────────────────────
-    compat = profile.get("compatibility")
+    compat_raw = profile.get("compatibility")
+    compat = _as_dict(compat_raw) if compat_raw is not None else None
+    if compat_raw is not None and not isinstance(compat_raw, dict):
+        fail("profile.compatibility", "Profile compatibility must be a valid object.")
     if not compat:
         warn("profile.compatibility", "Profile has no compatibility section \u2014 skipping version checks.")
     else:
@@ -114,6 +134,21 @@ def validate_and_apply(
         fail("localities.schema", 'Expected localities schema "oglap.localities_naming.v1", got "%s".' % _got_schema)
     else:
         pass_("localities.schema", f"Localities schema: {loc_schema}")
+
+    def _localities_table(name: str) -> dict[str, Any]:
+        raw = localities_naming.get(name)
+        if raw is None:
+            return {}
+        if not isinstance(raw, dict):
+            fail(f"localities.{name}.schema", f"Localities {name} must be a valid object.")
+            return {}
+        return raw
+
+    level_4_regions = _localities_table("level_4_regions")
+    level_6_prefectures = _localities_table("level_6_prefectures")
+    level_8_sous_prefectures = _localities_table("level_8_sous_prefectures")
+    level_9_villages = _localities_table("level_9_villages")
+    level_10_quartiers = _localities_table("level_10_quartiers")
 
     # ── 5. Country code alignment ─────────────────────────────────
     profile_country = meta.get("country_oglap_code") or meta.get("iso_alpha_2")
@@ -144,28 +179,28 @@ def validate_and_apply(
         pass_("localities.source", 'Localities naming was generated from source: "%s".' % loc_source)
 
     # ── 8. Structural check (admin levels) ────────────────────────
-    has_l4 = bool(localities_naming.get("level_4_regions") and len(localities_naming["level_4_regions"]) > 0)
-    has_l6 = bool(localities_naming.get("level_6_prefectures") and len(localities_naming["level_6_prefectures"]) > 0)
+    has_l4 = bool(level_4_regions)
+    has_l6 = bool(level_6_prefectures)
     has_zones = (
-        bool(localities_naming.get("level_8_sous_prefectures") and len(localities_naming["level_8_sous_prefectures"]) > 0)
-        or bool(localities_naming.get("level_9_villages") and len(localities_naming["level_9_villages"]) > 0)
-        or bool(localities_naming.get("level_10_quartiers") and len(localities_naming["level_10_quartiers"]) > 0)
+        bool(level_8_sous_prefectures)
+        or bool(level_9_villages)
+        or bool(level_10_quartiers)
     )
     if not has_l4:
         fail("localities.level_4", "Localities naming has no level_4_regions entries \u2014 regions cannot be resolved.")
     else:
-        pass_("localities.level_4", "Level 4 regions: %d entries." % len(localities_naming["level_4_regions"]))
+        pass_("localities.level_4", "Level 4 regions: %d entries." % len(level_4_regions))
     if not has_l6:
         warn("localities.level_6", "Localities naming has no level_6_prefectures \u2014 prefecture resolution will use fallbacks.")
     else:
-        pass_("localities.level_6", "Level 6 prefectures: %d entries." % len(localities_naming["level_6_prefectures"]))
+        pass_("localities.level_6", "Level 6 prefectures: %d entries." % len(level_6_prefectures))
     if not has_zones:
         warn("localities.zones", "Localities naming has no zone entries (levels 8/9/10) \u2014 local grid addressing will be unavailable.")
     else:
         count = (
-            len(localities_naming.get("level_8_sous_prefectures") or {})
-            + len(localities_naming.get("level_9_villages") or {})
-            + len(localities_naming.get("level_10_quartiers") or {})
+            len(level_8_sous_prefectures)
+            + len(level_9_villages)
+            + len(level_10_quartiers)
         )
         pass_("localities.zones", f"Zone entries (levels 8/9/10): {count} total.")
 
@@ -176,9 +211,9 @@ def validate_and_apply(
     missing_explicit_region = 0
     zone_code_re = re.compile(r"^[A-Z0-9]{1,8}$")
     for table in (
-        localities_naming.get("level_8_sous_prefectures") or {},
-        localities_naming.get("level_9_villages") or {},
-        localities_naming.get("level_10_quartiers") or {},
+        level_8_sous_prefectures,
+        level_9_villages,
+        level_10_quartiers,
     ):
         for entry in table.values():
             if not isinstance(entry, dict):
@@ -221,7 +256,10 @@ def validate_and_apply(
         )
 
     csw = extent.get("country_sw")
-    bounds = extent.get("country_bounds") or {}
+    bounds_raw = extent.get("country_bounds")
+    bounds = _as_dict(bounds_raw)
+    if bounds_raw is not None and not isinstance(bounds_raw, dict):
+        fail("profile.country_extent.country_bounds", "country_bounds must be a valid object.")
     bsw = bounds.get("sw")
     bne = bounds.get("ne")
     if not _valid_lat_lon_pair(csw):
@@ -233,7 +271,7 @@ def validate_and_apply(
     if _valid_lat_lon_pair(bsw) and _valid_lat_lon_pair(bne) and bne[0] < bsw[0]:
         fail("profile.country_extent.country_bounds", f"country_bounds.ne.lat ({bne[0]}) must be \u2265 country_bounds.sw.lat ({bsw[0]}). Lon may wrap (antimeridian), but lat must not.")
 
-    requested_mode = (profile.get("grid_settings") or {}).get("distance_mode")
+    requested_mode = grid_settings.get("distance_mode")
     if requested_mode is None:
         validated_distance_mode = "flat"
         pass_("grid_settings.distance_mode", 'distance_mode not specified \u2014 defaulting to "flat" (backward-compatible).')
@@ -243,6 +281,26 @@ def validate_and_apply(
     else:
         validated_distance_mode = "flat"
         fail("grid_settings.distance_mode", f'Unknown distance_mode "{requested_mode}". Must be one of: "flat", "wgs84_ellipsoid". A typo here would silently shift every LAP code, so init refuses to start.')
+
+    distance_conversion_raw = grid_settings.get("distance_conversion")
+    distance_conversion = _as_dict(distance_conversion_raw)
+    if distance_conversion_raw is not None and not isinstance(distance_conversion_raw, dict):
+        fail("grid_settings.distance_conversion", "distance_conversion must be a valid object.")
+    configured_meters_per_degree_lat = distance_conversion.get("meters_per_degree_lat")
+    if configured_meters_per_degree_lat is None:
+        validated_meters_per_degree_lat = 111_320.0
+        pass_("grid_settings.distance_conversion.meters_per_degree_lat", "meters_per_degree_lat not specified — defaulting to 111320.")
+    elif (
+        isinstance(configured_meters_per_degree_lat, (int, float))
+        and not isinstance(configured_meters_per_degree_lat, bool)
+        and math.isfinite(configured_meters_per_degree_lat)
+        and configured_meters_per_degree_lat > 0
+    ):
+        validated_meters_per_degree_lat = float(configured_meters_per_degree_lat)
+        pass_("grid_settings.distance_conversion.meters_per_degree_lat", f"meters_per_degree_lat: {configured_meters_per_degree_lat}.")
+    else:
+        validated_meters_per_degree_lat = 111_320.0
+        fail("grid_settings.distance_conversion.meters_per_degree_lat", "meters_per_degree_lat must be a finite positive number.")
 
     # ── If any fatal check, abort ─────────────────────────────────
     if fatal:
@@ -259,21 +317,21 @@ def validate_and_apply(
     state.country_profile = profile
     state.country_code = profile_country or "GN"
 
-    state.oglap_country_regions = _map_from_code_table(localities_naming.get("level_4_regions"))
+    state.oglap_country_regions = _map_from_code_table(level_4_regions)
 
     state.oglap_country_regions_reverse = {
         v: k for k, v in state.oglap_country_regions.items()
     }
 
-    state.oglap_country_prefectures = _map_from_code_table(localities_naming.get("level_6_prefectures"))
+    state.oglap_country_prefectures = _map_from_code_table(level_6_prefectures)
 
     # Cache zone codes by ID (levels 8, 9, 10)
     state.oglap_zone_codes_by_id.clear()
     state.oglap_explicit_zone_codes_by_region.clear()
     zones_list = (
-        list((localities_naming.get("level_8_sous_prefectures") or {}).values())
-        + list((localities_naming.get("level_9_villages") or {}).values())
-        + list((localities_naming.get("level_10_quartiers") or {}).values())
+        list(level_8_sous_prefectures.values())
+        + list(level_9_villages.values())
+        + list(level_10_quartiers.values())
     )
     for z in zones_list:
         if not isinstance(z, dict):
@@ -302,11 +360,7 @@ def validate_and_apply(
 
     state.country_sw = list(csw)
     state.country_bounds = {"sw": list(bsw), "ne": list(bne)}
-    state.meters_per_degree_lat = (
-        (profile.get("grid_settings") or {})
-        .get("distance_conversion", {})
-        .get("meters_per_degree_lat", 111_320)
-    )
+    state.meters_per_degree_lat = validated_meters_per_degree_lat
     state.distance_mode = validated_distance_mode
     state.country_crosses_antimeridian = state.country_bounds["ne"][1] < state.country_bounds["sw"][1]
 

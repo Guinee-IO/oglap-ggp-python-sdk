@@ -53,6 +53,18 @@ def normalize_lon_for_grid(lon: float, origin_lon: float) -> float:
     return lon + 360 if lon < origin_lon else lon
 
 
+def wrap_lon(lon: float) -> float:
+    """Normalize any finite longitude to ``[-180, 180]``.
+
+    Preserve ``+180`` for positive inputs so antimeridian canonicalization is
+    stable across encode and decode.
+    """
+    if not math.isfinite(lon):
+        return lon
+    wrapped = (lon + 180) % 360 - 180
+    return 180.0 if wrapped == -180 and lon > 0 else wrapped
+
+
 def is_offset_within_local_grid(east_m: float, north_m: float) -> bool:
     return (
         east_m >= -GRID_EPSILON_M
@@ -75,7 +87,7 @@ def encode_alpha3(n: int) -> str:
     """Encode integer 0..17 575 as 3 A-Z letters (AAA..ZZZ)."""
     try:
         safe = math.floor(float(n))
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         safe = 0
     val = max(0, min(safe, ALPHA3_MAX - 1))
     c2 = val % 26
@@ -101,8 +113,13 @@ def decode_alpha3(s: str) -> int:
 # ── Local macroblock helpers ────────────────────────────────────────
 
 def macro_letter(n: int) -> str:
-    """Letter encoding: 0->A, 1->B, ..., 9->J."""
-    return chr(65 + min(9, max(0, int(n))))
+    """Letter encoding: 0->A, 1->B, ..., 9->J.
+
+    Uses ``floor`` (not ``int()``, which truncates toward zero) so negative
+    fractional inputs round the same way as Node's ``Math.floor`` before the
+    ``max(0, ...)`` clamp.
+    """
+    return chr(65 + min(9, max(0, int(math.floor(n)))))
 
 
 def encode_local_macroblock(east_blocks: int, north_blocks: int) -> str:
@@ -122,9 +139,17 @@ def encode_national_macroblock(east_km: int, north_km: int) -> str:
 
 
 def encode_microspot(east_m: float, north_m: float) -> str:
-    """Encode microspot: 0-99 east, 0-99 north -> 4 digits (e.g. ``5020``)."""
-    e_raw = round(east_m) if isinstance(east_m, (int, float)) and math.isfinite(east_m) else 0
-    n_raw = round(north_m) if isinstance(north_m, (int, float)) and math.isfinite(north_m) else 0
+    """Encode microspot: 0-99 east, 0-99 north -> 4 digits (e.g. ``5020``).
+
+    SW-anchored cell containment: microspot index N covers the half-open
+    interval ``[N, N+1)`` metres, so index 0 IS the macroblock's SW 1x1 m cell.
+    This MUST be ``floor`` (not ``round``) to match the decoder, which
+    reconstructs a point at the cell's SW corner. Using ``round`` here would
+    also reintroduce a cross-SDK divergence: Python ``round`` is banker's
+    rounding (half-to-even) while JS/Dart round half-away-from-zero.
+    """
+    e_raw = int(math.floor(east_m)) if isinstance(east_m, (int, float)) and math.isfinite(east_m) else 0
+    n_raw = int(math.floor(north_m)) if isinstance(north_m, (int, float)) and math.isfinite(north_m) else 0
     e = min(99, max(0, e_raw))
     n = min(99, max(0, n_raw))
     return f"{e:02d}{n:02d}"
@@ -223,10 +248,15 @@ def compute_lap(
             "Local grid offset is outside the 10 km x 10 km addressable range."
         )
 
-    block_east = int(math.floor(east_m_eps / LOCAL_CELL_SIZE_M))
-    block_north = int(math.floor(north_m_eps / LOCAL_CELL_SIZE_M))
-    in_block_east = east_m_eps - block_east * LOCAL_CELL_SIZE_M
-    in_block_north = north_m_eps - block_north * LOCAL_CELL_SIZE_M
+    # The tolerance may admit a tiny negative value at the SW edge. Normalize
+    # it to the true origin before decomposition; otherwise floor(-epsilon)
+    # selects block -1 and its 99.x m remainder is paired with clamped block 0.
+    local_east_m = max(0.0, east_m_eps)
+    local_north_m = max(0.0, north_m_eps)
+    block_east = int(math.floor(local_east_m / LOCAL_CELL_SIZE_M))
+    block_north = int(math.floor(local_north_m / LOCAL_CELL_SIZE_M))
+    in_block_east = local_east_m - block_east * LOCAL_CELL_SIZE_M
+    in_block_north = local_north_m - block_north * LOCAL_CELL_SIZE_M
     macroblock = encode_local_macroblock(block_east, block_north)
     microspot = encode_microspot(in_block_east, in_block_north)
 

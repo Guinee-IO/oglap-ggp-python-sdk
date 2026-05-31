@@ -22,6 +22,7 @@ from ._grid import (
     decode_microspot,
     meters_per_degree_lat,
     meters_per_degree_lon,
+    wrap_lon,
 )
 from ._spatial import (
     build_lap_search_index,
@@ -445,8 +446,8 @@ def lap_to_coordinates(lap_code: str) -> dict[str, float] | None:
 
         lap_to_coordinates("GN-FAR-HMDEUP-3241")   # national with CC
         lap_to_coordinates("FAR-HMDEUP-3241")       # national without CC
-        lap_to_coordinates("GN-CON-QCL0-A2A3-6041") # local with CC
-        lap_to_coordinates("CON-QCL0-A2A3-6041")    # local without CC
+        lap_to_coordinates("GN-CON-QCL0-A2A3-5940") # local with CC
+        lap_to_coordinates("CON-QCL0-A2A3-5940")    # local without CC
 
     Returns ``None`` if the code cannot be parsed or resolved.
     """
@@ -488,11 +489,9 @@ def lap_to_coordinates(lap_code: str) -> dict[str, float] | None:
     east_m = macro["blockEast"] * cell_size + micro["eastM"] * micro_scale
     north_m = macro["blockNorth"] * cell_size + micro["northM"] * micro_scale
     lat = origin_lat + north_m / m_per_lat
-    lon = origin_lon + east_m / meters_per_degree_lon(origin_lat)
-    if lon > 180:
-        lon -= 360
-    elif lon < -180:
-        lon += 360
+    lon = wrap_lon(origin_lon + east_m / meters_per_degree_lon(origin_lat))
+    if not math.isfinite(lat) or not math.isfinite(lon) or lat < -90 or lat > 90:
+        return None
     return {"lat": lat, "lon": lon}
 
 
